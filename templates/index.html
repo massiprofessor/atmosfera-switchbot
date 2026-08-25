@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#080A0F">
+  <title>Atmosfera — Sensori SwitchBot</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+</head>
+<body>
+  <!-- Atmosfera animata -->
+  <div class="sky" id="sky"></div>
+  <canvas id="particles"></canvas>
+
+  <div class="wrap">
+    <!-- Top bar -->
+    <header class="topbar">
+      <div class="brand">
+        <h1>Atmosfera<span class="dot">.</span></h1>
+        <span class="tag">SwitchBot · live</span>
+      </div>
+      <div class="top-right">
+        <div class="live offline" id="liveBadge">
+          <span class="pip"></span><span id="liveText">connessione…</span>
+        </div>
+        <div class="clock">
+          <span id="clockTime">--:--:--</span>
+          <span class="date" id="clockDate">—</span>
+        </div>
+        <button class="icon-btn" id="refreshBtn" title="Aggiorna adesso" aria-label="Aggiorna adesso">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        </button>
+        <button class="icon-btn" id="settingsBtn" title="Impostazioni" aria-label="Impostazioni">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Riepilogo -->
+    <section class="summary hidden" id="summary"></section>
+
+    <!-- Griglia sensori -->
+    <main class="grid" id="grid"></main>
+
+    <!-- Onboarding / stato vuoto -->
+    <section class="empty" id="empty">
+      <div class="glyph">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0z"/></svg>
+      </div>
+      <h2>Colleghiamo i tuoi sensori</h2>
+      <p>Per iniziare, apri le impostazioni e inserisci il <strong>token</strong> e il <strong>secret</strong> generati dall'app SwitchBot. Poi avvia la scansione: la dashboard troverà da sola i termometri e comincerà a leggerli in tempo reale.</p>
+      <button class="btn btn-primary" id="emptyCta">Apri le impostazioni</button>
+    </section>
+
+    <!-- Storico -->
+    <section class="history-sec hidden" id="historySec">
+      <div class="section-head">
+        <h2>Andamento</h2>
+        <div class="range-tabs" id="rangeTabs">
+          <button data-h="3">3h</button>
+          <button data-h="12">12h</button>
+          <button data-h="24" class="active">24h</button>
+          <button data-h="72">3g</button>
+          <button data-h="168">7g</button>
+        </div>
+      </div>
+      <div class="chart-card">
+        <h3>Temperatura</h3>
+        <div class="chart-wrap"><canvas id="tempChart"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h3>Umidità relativa</h3>
+        <div class="chart-wrap"><canvas id="humChart"></canvas></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Drawer impostazioni -->
+  <div class="scrim" id="scrim"></div>
+  <aside class="drawer" id="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <h2>Impostazioni</h2>
+      <button class="icon-btn" id="closeDrawer" aria-label="Chiudi">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="drawer-body">
+      <!-- Credenziali API -->
+      <div class="fieldset">
+        <div class="legend">Credenziali API SwitchBot</div>
+        <div class="field">
+          <label for="fToken">Token</label>
+          <input type="text" id="fToken" placeholder="incolla qui il token" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="fSecret">Secret</label>
+          <input type="password" id="fSecret" placeholder="incolla qui il secret" autocomplete="off" spellcheck="false">
+          <p class="hint">Nell'app: Profilo → Preferenze → About, tocca 10 volte su "App Version" → Developer Options → Get Token. Serve app v6.14+ e Cloud Services attivi sull'Hub Mini.</p>
+        </div>
+        <button class="btn btn-ghost full" id="testBtn">Verifica credenziali</button>
+        <div class="test-result" id="testResult"></div>
+      </div>
+
+      <!-- Sensori -->
+      <div class="fieldset">
+        <div class="legend">Sensori rilevati</div>
+        <div class="dev-list" id="devList">
+          <p class="hint">Nessun sensore ancora. Avvia una scansione.</p>
+        </div>
+        <button class="btn btn-primary full" id="scanBtn" style="margin-top:14px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          Scansiona i dispositivi
+        </button>
+      </div>
+
+      <!-- Aggiornamento -->
+      <div class="fieldset">
+        <div class="legend">Aggiornamento dati</div>
+        <div class="field">
+          <label for="fInterval">Ogni quanto interrogare i sensori (secondi)</label>
+          <input type="number" id="fInterval" min="30" step="10" value="120">
+          <p class="hint">Limite SwitchBot: 10.000 chiamate/giorno. Con 3 sensori, 120s = ~2.160 letture/giorno. Aprendo la pagina la lettura avviene comunque subito.</p>
+        </div>
+        <div class="toggle-row">
+          <span class="tl">Raccogli anche a pagina chiusa</span>
+          <label class="switch"><input type="checkbox" id="fBgPoll" checked><span class="slider"></span></label>
+        </div>
+      </div>
+
+      <!-- Aspetto -->
+      <div class="fieldset">
+        <div class="legend">Aspetto</div>
+        <div class="row2">
+          <div class="field">
+            <label for="fUnit">Unità temperatura</label>
+            <select id="fUnit"><option value="C">Celsius (°C)</option><option value="F">Fahrenheit (°F)</option></select>
+          </div>
+          <div class="field">
+            <label for="fTheme">Atmosfera</label>
+            <select id="fTheme"><option value="auto">Auto (dalla temperatura)</option><option value="dark">Fissa scura</option><option value="midnight">Mezzanotte</option></select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Widget -->
+      <div class="fieldset">
+        <div class="legend">Informazioni mostrate</div>
+        <div id="widgetToggles"></div>
+      </div>
+
+      <!-- Storico -->
+      <div class="fieldset">
+        <div class="legend">Storico</div>
+        <button class="btn btn-danger full" id="clearHistBtn">Cancella tutto lo storico</button>
+      </div>
+    </div>
+
+    <div class="drawer-foot">
+      <button class="btn btn-ghost" id="cancelBtn" style="flex:1;">Annulla</button>
+      <button class="btn btn-primary" id="saveBtn" style="flex:2;">Salva impostazioni</button>
+    </div>
+  </aside>
+
+  <div class="toast" id="toast"></div>
+
+  <!-- Gradienti SVG condivisi dai gauge -->
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <linearGradient id="tempGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%"  stop-color="var(--accent-2)"/>
+        <stop offset="100%" stop-color="var(--accent)"/>
+      </linearGradient>
+    </defs>
+  </svg>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

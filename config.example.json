@@ -1,0 +1,21 @@
+{
+  "credentials": { "token": "", "secret": "" },
+  "poll_interval": 120,
+  "min_store_gap": 30,
+  "history_max_points": 3000,
+  "temperature_unit": "C",
+  "theme": "auto",
+  "background_poll": true,
+  "devices": [],
+  "widgets": {
+    "temperature": true,
+    "humidity": true,
+    "battery": true,
+    "dewpoint": true,
+    "feelslike": true,
+    "abshumidity": true,
+    "comfort": true,
+    "co2": true,
+    "sparkline": true
+  }
+}

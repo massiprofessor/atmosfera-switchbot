@@ -1,0 +1,21 @@
+# Servizio systemd per Atmosfera — dashboard SwitchBot
+# Copia in /etc/systemd/system/ e adatta i percorsi/utente.
+#   sudo cp switchbot-dashboard.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now switchbot-dashboard
+[Unit]
+Description=Atmosfera - Dashboard sensori SwitchBot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/switchbot-dashboard
+Environment=PORT=5001
+ExecStart=/home/pi/switchbot-dashboard/venv/bin/python app.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
