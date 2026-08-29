@@ -17,5 +17,12 @@
     "comfort": true,
     "co2": true,
     "sparkline": true
+  },
+  "openweather": {
+    "enabled": false,
+    "api_key": "",
+    "city": "",
+    "poll_interval": 600,
+    "min_gap": 60
   }
 }

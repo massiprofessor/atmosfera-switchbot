@@ -26,6 +26,8 @@ Una dashboard self-hosted che legge i termometri/igrometri **SwitchBot**, mostra
 - [Requisiti](#-requisiti)
 - [Installazione](#-installazione)
 - [Configurazione](#-configurazione)
+- [Meteo esterno (OpenWeatherMap)](#-meteo-esterno-openweathermap)
+- [Storico meteo giornaliero](#-storico-meteo-giornaliero)
 - [Avvio automatico (systemd)](#-avvio-automatico-systemd)
 - [Grandezze derivate](#-grandezze-derivate)
 - [Personalizzazione](#-personalizzazione)
@@ -44,6 +46,9 @@ Una dashboard self-hosted che legge i termometri/igrometri **SwitchBot**, mostra
 - 🎨 **Sfondo "atmosfera" dinamico** — il cielo cambia colore in base alla temperatura media reale: indaco glaciale quando fa freddo, verde-menta in comfort, ambra/corallo quando fa caldo.
 - 🌡️ **Una card per sensore** con gauge circolare della temperatura, indicatore di umidità a liquido animato, stato batteria e mini-grafico delle ultime letture.
 - 🧮 **Grandezze derivate** calcolate al volo: punto di rugiada, umidità assoluta (g/m³), temperatura percepita (heat index) e indice di comfort.
+- 🌦️ **Meteo esterno via OpenWeatherMap** — widget con scene animate (sole, nuvole, pioggia, neve, temporale, nebbia; giorno/notte) che mostra temperatura, pressione, umidità, punto di rugiada e vento, con il nome secondo la rosa dei venti (Scirocco, Libeccio, Maestrale…) e l'intensità. Se il limite di chiamate viene superato, non va in errore: mostra un avviso e gli ultimi dati validi in cache.
+- 📅 **Storico meteo giornaliero** — registra giorno per giorno minime e massime (temperatura, umidità, pressione) in un archivio persistente, con grafico min/max, consultazione di una data precisa e risposte pronte sul **giorno più caldo e più freddo dell'anno**.
+- 🔀 **Escursione interno/esterno** — differenza in tempo reale tra la temperatura esterna (meteo) e la media dei sensori interni.
 - 📈 **Storico su grafici** interattivi (da 3 ore a 7 giorni), salvato in `history.json`.
 - ⚡ **Dati in tempo reale** — cattura immediata all'apertura della pagina, più polling in background che continua a raccogliere anche a scheda chiusa.
 - 🎛️ **Personalizzabile** — scegli quali informazioni mostrare, riordina le card trascinandole, imposta unità °C/°F e intervallo di interrogazione.
@@ -56,6 +61,10 @@ Una dashboard self-hosted che legge i termometri/igrometri **SwitchBot**, mostra
 | Desktop | Mobile |
 |:---:|:---:|
 | ![Desktop](docs/screenshot-desktop.png) | ![Mobile](docs/screenshot-mobile.png) |
+
+Widget meteo esterno (OpenWeatherMap) con scena animata:
+
+![Meteo esterno](docs/screenshot-weather.png)
 
 ## 🧭 Come funziona
 
@@ -125,6 +134,57 @@ Tutta la configurazione avviene dal **pannello Impostazioni** della dashboard: n
 
 Le impostazioni vengono scritte in `config.json` (creato automaticamente al primo avvio).
 
+## 🌦️ Meteo esterno (OpenWeatherMap)
+
+Oltre ai tuoi sensori, la dashboard può mostrare il meteo di una città tramite [OpenWeatherMap](https://openweathermap.org/api). Il widget è animato in base alle condizioni (sole, nuvole, pioggia, neve, temporale, nebbia, con variante giorno/notte) e riporta **temperatura, pressione, umidità, punto di rugiada e direzione del vento**.
+
+### Nome del vento (rosa dei venti)
+
+Dalla direzione fornita da OpenWeatherMap la dashboard ricava il nome del vento secondo la rosa dei venti mediterranea a 16 punti, indicando anche provenienza (cardinale) e intensità:
+
+| Provenienza | Vento | | Provenienza | Vento |
+|---|---|---|---|---|
+| N | Tramontana | | S | Ostro |
+| NNE | Greco-Tramontana | | SSO | Ostro-Libeccio |
+| NE | Grecale | | SO | Libeccio |
+| ENE | Greco-Levante | | OSO | Libeccio-Ponente |
+| E | Levante | | O | Ponente |
+| ESE | Scirocco-Levante | | ONO | Maestrale-Ponente |
+| SE | Scirocco | | NO | Maestrale |
+| SSE | Ostro-Scirocco | | NNO | Maestrale-Tramontana |
+
+L'intensità è espressa con la scala di Beaufort in italiano (da *Calma* e *Bava di vento* fino a *Brezza leggera/tesa*, *Vento moderato/teso/fresco/forte*, *Burrasca*, *Tempesta* e oltre).
+
+### Attivazione
+
+1. Registrati gratis su [openweathermap.org](https://openweathermap.org) e copia la tua **API key** (sezione *API keys*). La chiave può richiedere fino a un paio d'ore per attivarsi dopo la creazione.
+2. Nella dashboard apri **Impostazioni → Meteo esterno**, attiva l'interruttore, incolla la API key e la città (consigliato il formato `Città,IT`).
+3. Premi **Verifica meteo** per controllare chiave e città, poi salva.
+
+### Gestione del limite di chiamate
+
+Il piano gratuito consente **60 chiamate al minuto**. Atmosfera è pensata per non sprecarle:
+
+- il meteo viene aggiornato a intervalli configurabili (default **600 s**), non a ogni apertura di pagina;
+- una cache lato server evita richieste ravvicinate;
+- **se il limite viene superato, l'app non va in errore**: mostra un avviso e continua a visualizzare l'ultimo dato valido, salvato in `weather_cache.json` (che sopravvive ai riavvii).
+
+> Il **punto di rugiada** non è fornito dall'endpoint gratuito "Current Weather": viene calcolato lato server da temperatura e umidità con la formula di Magnus, così non serve la One Call API a pagamento.
+
+## 📅 Storico meteo giornaliero
+
+Ogni lettura del meteo esterno alimenta un **archivio giornaliero** persistente (`weather_daily.json`) che, per ogni giornata, conserva minima e massima di temperatura, umidità e pressione. Da qui la sezione **Storico meteo esterno** offre:
+
+- un **grafico delle minime e massime** giornaliere, con intervalli 7g / 30g / 90g / anno / tutto;
+- schede con risposte immediate: **giorno più caldo** e **giorno più freddo dell'anno**, i valori di **oggi** e la copertura dei dati;
+- un **selettore data** per rivedere minima e massima (e umidità/pressione) di una giornata precisa.
+
+![Giorno più caldo e più freddo](docs/screenshot-history.png)
+
+L'archivio si popola dal momento dell'attivazione in poi: i giorni precedenti all'installazione non sono disponibili. La risoluzione di minime/massime dipende dall'intervallo di aggiornamento del meteo (con 600 s si raccolgono ~144 letture al giorno, più che sufficienti).
+
+> L'escursione **interno/esterno** mostrata nel riepilogo è invece un valore in tempo reale (temperatura esterna meno media dei sensori interni), non un dato d'archivio.
+
 ## 🔧 Avvio automatico (systemd)
 
 Per far partire Atmosfera all'accensione e riavviarla in caso di crash, usa il file `switchbot-dashboard.service` incluso.
@@ -170,6 +230,8 @@ Da temperatura e umidità relativa la dashboard calcola:
 | **Umidità assoluta** | Grammi d'acqua per m³ d'aria | Derivata dalla pressione di vapore |
 | **Temperatura percepita** | Quanto "caldo" si sente davvero | Heat index (Rothfusz) sopra i 26 °C |
 | **Indice di comfort** | Etichetta sintetica del benessere ambientale | Classificazione su temperatura + umidità |
+
+Le stesse formule alimentano il punto di rugiada del widget meteo esterno.
 
 ## 🎛️ Personalizzazione
 
@@ -223,24 +285,28 @@ Chart.js non è raggiungibile (nessun accesso a internet) oppure lo storico è a
 
 ```
 atmosfera-switchbot/
-├── app.py                       # Backend Flask: firma, scan, status, storico, derivati
+├── app.py                       # Backend Flask: firma, scan, status, storico, derivati, meteo
 ├── requirements.txt
 ├── config.example.json          # Struttura di config.json (senza credenziali)
 ├── switchbot-dashboard.service  # Unità systemd
 ├── templates/
 │   └── index.html               # Struttura della pagina + drawer impostazioni
 ├── static/
-│   ├── css/style.css            # Atmosfera animata, gauge, glassmorphism, responsive
-│   └── js/app.js                # Rendering, polling, grafici, impostazioni
+│   ├── css/style.css            # Atmosfera animata, gauge, scene meteo, responsive
+│   └── js/app.js                # Rendering, polling, grafici, meteo, impostazioni
 └── docs/
     ├── screenshot-desktop.png
-    └── screenshot-mobile.png
+    ├── screenshot-mobile.png
+    ├── screenshot-weather.png
+    └── screenshot-history.png
 ```
+
+> A runtime l'app crea anche `weather_daily.json` (archivio giornaliero del meteo), oltre a `config.json`, `history.json` e `weather_cache.json`. Tutti questi file sono esclusi da Git.
 
 ## 🔒 Sicurezza e privacy
 
-- `config.json` contiene `token` e `secret` ed è **escluso da Git** tramite `.gitignore`: le tue credenziali non finiscono mai nel repository.
-- Il `secret` non viene **mai** restituito al browser: l'endpoint di lettura della configurazione lo maschera.
+- `config.json` contiene `token`, `secret` e la **API key** di OpenWeatherMap ed è **escluso da Git** tramite `.gitignore`: le tue credenziali non finiscono mai nel repository.
+- Il `secret` SwitchBot e la API key meteo non vengono **mai** restituiti al browser: l'endpoint di lettura della configurazione li maschera.
 - Tutti i dati restano sul **tuo** dispositivo: nessun servizio esterno oltre al cloud SwitchBot necessario per leggere i sensori.
 - **Limite API SwitchBot:** 10.000 chiamate al giorno. Con 3 sensori e intervallo di 120 s sono circa 2.160 letture/giorno, ampiamente entro il limite.
 
@@ -251,6 +317,7 @@ Idee per il futuro (contributi benvenuti):
 - [ ] Chart.js e font serviti localmente per l'uso completamente offline
 - [ ] Notifiche/soglie configurabili (es. umidità troppo alta)
 - [ ] Esportazione dello storico in CSV
+- [ ] Archiviazione anche dell'escursione interno/esterno giorno per giorno
 - [ ] Supporto ad altri sensori SwitchBot
 
 ## 🤝 Contribuire

@@ -34,8 +34,11 @@ from flask import Flask, jsonify, request, render_template
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 HISTORY_PATH = os.path.join(BASE_DIR, "history.json")
+WEATHER_CACHE_PATH = os.path.join(BASE_DIR, "weather_cache.json")
+WEATHER_DAILY_PATH = os.path.join(BASE_DIR, "weather_daily.json")
 
 SWITCHBOT_BASE = "https://api.switch-bot.com"
+OWM_URL = "https://api.openweathermap.org/data/2.5/weather"
 
 # Tipi di dispositivo SwitchBot che espongono temperatura/umidità
 METER_TYPES = {
@@ -85,6 +88,13 @@ def default_config():
             "comfort": True,
             "co2": True,
             "sparkline": True,
+        },
+        "openweather": {               # meteo esterno via OpenWeatherMap
+            "enabled": False,
+            "api_key": "",
+            "city": "",                # es. "Molfetta,IT"
+            "poll_interval": 600,      # ogni quanto aggiornare il meteo (s)
+            "min_gap": 60,             # anti-spam: non richiamare più spesso di così
         },
     }
 
@@ -237,6 +247,200 @@ def enrich(reading):
 
 
 # --------------------------------------------------------------------------- #
+#  Meteo esterno — OpenWeatherMap
+# --------------------------------------------------------------------------- #
+# Cache in memoria dell'ultima lettura meteo valida. Serve per due cose:
+#  1) non richiamare l'API a ogni apertura di pagina (rispetta i limiti);
+#  2) se il limite viene superato, mostrare comunque l'ultimo dato noto.
+_weather_cache = {"data": None, "t": 0, "rate_limited": False}
+
+
+def load_weather_cache():
+    global _weather_cache
+    if os.path.exists(WEATHER_CACHE_PATH):
+        try:
+            with open(WEATHER_CACHE_PATH, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+            if saved.get("data"):
+                _weather_cache.update({"data": saved["data"], "t": saved.get("t", 0)})
+        except (json.JSONDecodeError, OSError):
+            pass
+
+
+def save_weather_cache():
+    try:
+        with open(WEATHER_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump({"data": _weather_cache["data"], "t": _weather_cache["t"]}, f, ensure_ascii=False)
+    except OSError:
+        pass
+
+
+# --------------------------------------------------------------------------- #
+#  Archivio giornaliero del meteo esterno (min/max per giornata)
+# --------------------------------------------------------------------------- #
+def load_daily():
+    with _file_lock:
+        if not os.path.exists(WEATHER_DAILY_PATH):
+            return {}
+        try:
+            with open(WEATHER_DAILY_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+
+
+def save_daily(daily):
+    with _file_lock:
+        try:
+            with open(WEATHER_DAILY_PATH, "w", encoding="utf-8") as f:
+                json.dump(daily, f, ensure_ascii=False)
+        except OSError:
+            pass
+
+
+def _minmax(rec, key, value, ts):
+    """Aggiorna min/max (e l'ora del massimo/minimo) di un campo nel record."""
+    if value is None:
+        return
+    if rec.get(key + "_min") is None or value < rec[key + "_min"]:
+        rec[key + "_min"] = value
+        if key == "t":
+            rec["t_min_t"] = ts
+    if rec.get(key + "_max") is None or value > rec[key + "_max"]:
+        rec[key + "_max"] = value
+        if key == "t":
+            rec["t_max_t"] = ts
+
+
+def update_daily(data):
+    """Aggiorna il record giornaliero (min/max di temp, umidità, pressione)."""
+    t = data.get("temperature")
+    if t is None:
+        return
+    ts = int(data.get("t", time.time()))
+    day = time.strftime("%Y-%m-%d", time.localtime(ts))   # data locale
+    daily = load_daily()
+    rec = daily.get(day) or {"date": day, "samples": 0, "first": ts}
+    _minmax(rec, "t", t, ts)
+    _minmax(rec, "h", data.get("humidity"), ts)
+    _minmax(rec, "p", data.get("pressure"), ts)
+    rec["samples"] = rec.get("samples", 0) + 1
+    rec["last"] = ts
+    daily[day] = rec
+    # conserva circa 400 giorni
+    if len(daily) > 400:
+        for k in sorted(daily.keys())[:-400]:
+            del daily[k]
+    save_daily(daily)
+
+
+def compute_extremes(daily):
+    """Giorno più caldo e più freddo, per l'anno in corso e in assoluto."""
+    days = [r for r in daily.values() if r.get("t_max") is not None]
+
+    def over(subset):
+        if not subset:
+            return None
+        hottest = max(subset, key=lambda r: r["t_max"])
+        coldest = min(subset, key=lambda r: r["t_min"])
+        return {
+            "hottest": {"date": hottest["date"], "value": hottest["t_max"]},
+            "coldest": {"date": coldest["date"], "value": coldest["t_min"]},
+        }
+
+    year = time.strftime("%Y")
+    year_days = [r for r in days if r["date"].startswith(year)]
+    return {"year": over(year_days), "all": over(days), "current_year": year}
+
+
+def normalize_weather(b):
+    """Estrae i campi utili dalla risposta OpenWeatherMap e calcola il rugiada."""
+    main = b.get("main", {}) or {}
+    wind = b.get("wind", {}) or {}
+    sysd = b.get("sys", {}) or {}
+    weather = (b.get("weather") or [{}])[0]
+    temp = main.get("temp")
+    hum = main.get("humidity")
+    return {
+        "city": b.get("name"),
+        "country": sysd.get("country"),
+        "temperature": temp,
+        "feels_like": main.get("feels_like"),
+        "pressure": main.get("pressure"),        # hPa
+        "humidity": hum,                         # %
+        "dewpoint": dew_point(temp, hum),        # calcolato lato server
+        "wind_speed": wind.get("speed"),         # m/s (units=metric)
+        "wind_deg": wind.get("deg"),             # direzione (° da cui soffia)
+        "wind_gust": wind.get("gust"),
+        "condition_id": weather.get("id"),
+        "condition_main": weather.get("main"),
+        "description": weather.get("description"),
+        "icon": weather.get("icon"),             # es. "10d" / "01n"
+        "sunrise": sysd.get("sunrise"),
+        "sunset": sysd.get("sunset"),
+        "t": int(time.time()),
+    }
+
+
+def fetch_weather(cfg=None, force=False, override=None):
+    """
+    Legge il meteo da OpenWeatherMap con gestione robusta dei limiti.
+    Ritorna sempre un dizionario: mai solleva eccezioni verso le rotte.
+    Codici possibili in 'error': not-configured, rate-limit, invalid-key,
+    city-not-found, network, http-XXX.
+    """
+    cfg = cfg or load_config()
+    ow = dict(cfg.get("openweather", {}))
+    if override:
+        ow.update(override)
+    key = (ow.get("api_key") or "").strip()
+    city = (ow.get("city") or "").strip()
+    if not key or not city:
+        return {"ok": False, "error": "not-configured"}
+
+    now = time.time()
+    gap = ow.get("min_gap", 60)
+    if not force and _weather_cache["data"] and (now - _weather_cache["t"]) < gap:
+        return {"ok": True, "data": _weather_cache["data"], "cached": True,
+                "rate_limited": _weather_cache["rate_limited"]}
+
+    try:
+        r = requests.get(OWM_URL, params={
+            "q": city, "appid": key, "units": "metric", "lang": "it",
+        }, timeout=15)
+    except requests.RequestException:
+        if _weather_cache["data"]:
+            return {"ok": True, "data": _weather_cache["data"], "stale": True, "error": "network"}
+        return {"ok": False, "error": "network"}
+
+    # --- Limite di utilizzo superato: NON è un errore fatale ---
+    if r.status_code == 429:
+        _weather_cache["rate_limited"] = True
+        log.warning("OpenWeatherMap: limite di utilizzo API superato (429).")
+        if _weather_cache["data"]:
+            return {"ok": True, "data": _weather_cache["data"], "rate_limited": True, "stale": True}
+        return {"ok": False, "error": "rate-limit"}
+
+    if r.status_code == 401:
+        return {"ok": False, "error": "invalid-key"}
+    if r.status_code == 404:
+        return {"ok": False, "error": "city-not-found"}
+    if r.status_code != 200:
+        if _weather_cache["data"]:
+            return {"ok": True, "data": _weather_cache["data"], "stale": True, "error": f"http-{r.status_code}"}
+        return {"ok": False, "error": f"http-{r.status_code}"}
+
+    data = normalize_weather(r.json())
+    _weather_cache.update({"data": data, "t": now, "rate_limited": False})
+    save_weather_cache()
+    try:
+        update_daily(data)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Aggiornamento archivio giornaliero fallito: %s", e)
+    return {"ok": True, "data": data}
+
+
+# --------------------------------------------------------------------------- #
 #  Lettura live + salvataggio storico
 # --------------------------------------------------------------------------- #
 def read_device_status(device_id, cfg):
@@ -303,9 +507,11 @@ def poll_and_store(cfg=None):
 # --------------------------------------------------------------------------- #
 _bg_thread = None
 _bg_stop = threading.Event()
+_last_weather = 0
 
 
 def background_loop():
+    global _last_weather
     log.info("Thread di polling avviato.")
     while not _bg_stop.is_set():
         cfg = load_config()
@@ -315,6 +521,15 @@ def background_loop():
                 poll_and_store(cfg)
             except Exception as e:  # noqa: BLE001
                 log.warning("Polling in background fallito: %s", e)
+        # meteo esterno: aggiornato al proprio ritmo, mai bloccante
+        ow = cfg.get("openweather", {})
+        if ow.get("enabled") and ow.get("api_key") and ow.get("city"):
+            if time.time() - _last_weather >= int(ow.get("poll_interval", 600)):
+                try:
+                    fetch_weather(cfg, force=True)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("Aggiornamento meteo fallito: %s", e)
+                _last_weather = time.time()
         _bg_stop.wait(interval)
 
 
@@ -346,6 +561,15 @@ def api_get_config():
         "has_token": bool(creds["token"]),
         "has_secret": bool(creds["secret"]),
     }
+    # non esponiamo mai la API key del meteo
+    ow = cfg.get("openweather", {})
+    safe["openweather"] = {
+        "enabled": ow.get("enabled", False),
+        "city": ow.get("city", ""),
+        "poll_interval": ow.get("poll_interval", 600),
+        "api_key": MASK if ow.get("api_key") else "",
+        "has_key": bool(ow.get("api_key")),
+    }
     return jsonify(safe)
 
 
@@ -372,6 +596,16 @@ def api_set_config():
     if "devices" in data and isinstance(data["devices"], list):
         # preserva enabled/order arrivati dal client
         cfg["devices"] = data["devices"]
+
+    # meteo esterno OpenWeatherMap
+    ow = data.get("openweather")
+    if isinstance(ow, dict):
+        cfg.setdefault("openweather", {})
+        if "api_key" in ow and ow["api_key"] and ow["api_key"] != MASK:
+            cfg["openweather"]["api_key"] = ow["api_key"].strip()
+        for k in ("enabled", "city", "poll_interval", "min_gap"):
+            if k in ow:
+                cfg["openweather"][k] = (ow[k].strip() if isinstance(ow[k], str) else ow[k])
 
     save_config(cfg)
     return jsonify({"ok": True})
@@ -464,11 +698,45 @@ def api_test():
         return jsonify({"ok": False, "error": str(e)}), 200
 
 
+@app.route("/api/weather", methods=["GET"])
+def api_weather():
+    """Meteo esterno. Non va mai in errore HTTP: comunica lo stato nel JSON."""
+    cfg = load_config()
+    if not cfg.get("openweather", {}).get("enabled"):
+        return jsonify({"ok": False, "error": "disabled"})
+    res = fetch_weather(cfg, force=(request.args.get("force") == "1"))
+    return jsonify(res)
+
+
+@app.route("/api/weather/test", methods=["POST"])
+def api_weather_test():
+    """Verifica API key e città senza attivare il widget."""
+    cfg = load_config()
+    data = request.get_json(force=True, silent=True) or {}
+    ow = data.get("openweather", {}) or {}
+    override = {}
+    if ow.get("api_key") and ow["api_key"] != MASK:
+        override["api_key"] = ow["api_key"].strip()
+    if ow.get("city"):
+        override["city"] = ow["city"].strip()
+    res = fetch_weather(cfg, force=True, override=override)
+    return jsonify(res)
+
+
+@app.route("/api/weather/daily", methods=["GET"])
+def api_weather_daily():
+    """Storico giornaliero del meteo esterno (min/max) + estremi dell'anno."""
+    daily = load_daily()
+    days = sorted(daily.values(), key=lambda r: r["date"])
+    return jsonify({"ok": True, "days": days, "extremes": compute_extremes(daily)})
+
+
 # --------------------------------------------------------------------------- #
 #  Avvio
 # --------------------------------------------------------------------------- #
 if __name__ == "__main__":
     load_config()          # crea config.json se non esiste
+    load_weather_cache()   # ripristina l'ultimo meteo noto
     start_background()     # avvia il polling continuo
     port = int(os.environ.get("PORT", 5001))
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
